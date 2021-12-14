@@ -1,0 +1,215 @@
+/*
+ * Copyright 2010-2020 Alfresco Software, Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.activiti.examples;
+
+import org.activiti.api.process.model.ProcessDefinition;
+import org.activiti.api.process.model.ProcessInstance;
+import org.activiti.api.process.model.builders.ProcessPayloadBuilder;
+import org.activiti.api.process.model.payloads.StartProcessPayload;
+import org.activiti.api.process.runtime.ProcessRuntime;
+import org.activiti.api.process.runtime.connector.Connector;
+import org.activiti.api.process.runtime.events.ProcessCompletedEvent;
+import org.activiti.api.process.runtime.events.listener.ProcessRuntimeEventListener;
+import org.activiti.api.runtime.shared.query.Page;
+import org.activiti.api.runtime.shared.query.Pageable;
+import org.activiti.engine.RepositoryService;
+import org.activiti.engine.repository.Deployment;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.util.StopWatch;
+
+import javax.annotation.PostConstruct;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.stream.Collectors;
+
+@SpringBootApplication(exclude = {SecurityAutoConfiguration.class,
+        ManagementWebSecurityAutoConfiguration.class})
+@EnableScheduling
+public class DemoApplication implements CommandLineRunner {
+
+    private Logger logger = LoggerFactory.getLogger(DemoApplication.class);
+
+    @Autowired
+    private ProcessRuntime processRuntime;
+    @Autowired
+    private RepositoryService repositoryService;
+
+    @Autowired
+    private org.activiti.examples.SecurityUtil securityUtil;
+
+    public static void main(String[] args) {
+        SpringApplication.run(DemoApplication.class, args);
+
+    }
+
+    @Override
+    public void run(String... args) {
+        securityUtil.logInAs("system");
+
+        Page<ProcessDefinition> processDefinitionPage = processRuntime.processDefinitions(Pageable.of(0, 10));
+        logger.info("> Available Process definitions: " + processDefinitionPage.getTotalItems());
+        for (ProcessDefinition pd : processDefinitionPage.getContent()) {
+            logger.info("\t > Process definition: " + pd);
+        }
+
+//        if(processDefinitionPage.getTotalItems() == 0){
+            Deployment deployment = repositoryService.createDeployment()
+                    .addClasspathResource("processes/categorize-content.bpmn20.xml").deploy();
+            logger.info(deployment.getKey());
+//        }
+
+        processText();
+    }
+
+//    @PostConstruct
+//    @Scheduled(initialDelay = 1000, fixedDelay = 1000)
+    public void processText() {
+
+        securityUtil.logInAs("system");
+
+
+
+        SimpleDateFormat formatter = new SimpleDateFormat("dd-MM-yy HH:mm:ss");
+
+//        logger.info("> Processing content: " + content + " at " + formatter.format(new Date()));
+        StopWatch stopWatch = new StopWatch();
+        stopWatch.start("start");
+        for(int i = 0; i < 1000; i ++) {
+            String content = pickRandomString();
+            ProcessInstance processInstance = processRuntime.start(ProcessPayloadBuilder
+                    .start()
+                    .withProcessDefinitionKey("categorizeProcess")
+                    .withName("Processing Content: " + content)
+                    .withVariable("content", content)
+                    .build());
+            logger.info(">>> Created Process Instance: " + processInstance);
+            logger.info(">>>finished "+ i);
+        }
+        stopWatch.stop();
+        logger.info(stopWatch.prettyPrint());
+    }
+    public void processTextParallel() {
+
+        securityUtil.logInAs("system");
+
+
+
+        SimpleDateFormat formatter = new SimpleDateFormat("dd-MM-yy HH:mm:ss");
+
+//        logger.info("> Processing content: " + content + " at " + formatter.format(new Date()));
+        StopWatch stopWatch = new StopWatch();
+        stopWatch.start("start");
+        ForkJoinPool forkJoinPool = new ForkJoinPool(50);
+        for(int i = 0; i < 50; i ++) {
+            String content = pickRandomString();
+            List<StartProcessPayload> processPayloads = new ArrayList<>();
+            for(int j = 0; j < 50; j++){
+                processPayloads.add(ProcessPayloadBuilder
+                        .start()
+                        .withProcessDefinitionKey("categorizeProcess")
+                        .withName("Processing Content: " + content)
+                        .withVariable("content", content)
+                        .build());
+            }
+            try {
+                forkJoinPool.submit(()->{
+                           return processPayloads.parallelStream().map(t->processRuntime.start(t)).collect(Collectors.toList());
+//                            logger.info(">>> Created Process Instance: " + processInstance);
+                        }
+                        ).get();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } catch (ExecutionException e) {
+                e.printStackTrace();
+            }
+
+
+            logger.info(">>>finished "+ i);
+        }
+        stopWatch.stop();
+        logger.info(stopWatch.prettyPrint());
+    }
+
+    @Bean
+    public Connector processTextConnector() {
+        return integrationContext -> {
+            Map<String, Object> inBoundVariables = integrationContext.getInBoundVariables();
+            String contentToProcess = (String) inBoundVariables.get("content");
+            // Logic Here to decide if content is approved or not
+            if (contentToProcess.contains("activiti")) {
+                logger.info("> Approving content: " + contentToProcess);
+                integrationContext.addOutBoundVariable("approved",
+                        true);
+            } else {
+                logger.info("> Discarding content: " + contentToProcess);
+                integrationContext.addOutBoundVariable("approved",
+                        false);
+            }
+            return integrationContext;
+        };
+    }
+
+    @Bean
+    public Connector tagTextConnector() {
+        return integrationContext -> {
+            String contentToTag = (String) integrationContext.getInBoundVariables().get("content");
+            contentToTag += " :) ";
+            integrationContext.addOutBoundVariable("content",
+                    contentToTag);
+            logger.info("Final Content: " + contentToTag);
+            return integrationContext;
+        };
+    }
+
+    @Bean
+    public Connector discardTextConnector() {
+        return integrationContext -> {
+            String contentToDiscard = (String) integrationContext.getInBoundVariables().get("content");
+            contentToDiscard += " :( ";
+            integrationContext.addOutBoundVariable("content",
+                    contentToDiscard);
+            logger.info("Final Content: " + contentToDiscard);
+            return integrationContext;
+        };
+    }
+
+    @Bean
+    public ProcessRuntimeEventListener<ProcessCompletedEvent> processCompletedListener() {
+        return processCompleted -> logger.info(">>> Process Completed: '"
+                + processCompleted.getEntity().getName() +
+                "' We can send a notification to the initiator: " + processCompleted.getEntity().getInitiator());
+    }
+
+    private String pickRandomString() {
+        String[] texts = {"hello from london", "Hi there from activiti!", "all good news over here.", "I've tweeted about activiti today.",
+                "other boring projects.", "activiti cloud - Cloud Native Java BPM"};
+        return texts[new Random().nextInt(texts.length)];
+    }
+
+}

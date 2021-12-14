@@ -1,0 +1,75 @@
+spring:
+  application:
+    name: soar-workflow-service
+  #Activiti property configuration
+  activiti:
+    #    database-schema-update: true
+    async-executor-activate: true # asyncExecutorEnabled属性设置设置true后将代替那些老的Job executor
+    history-level: activity
+    db-history-used: true
+    check-process-definitions: false # 自动部署验证设置:true-开启（默认）、false-关闭
+    async-executor:
+      core-pool-size: 40
+      max-pool-size: 80
+
+    es-storage: true # 开启ES存储
+  groovy:
+    template:
+      check-template-location: false
+  elasticsearch:
+    rest:
+      uris: 192.168.30.151:9200
+  kafka:
+    # 指定kafka集群地址
+    bootstrap-servers: 192.168.30.152:9092
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      # 如果两个应用程序为并行消费某个topic的消息，需要将两个应用的group-id指定一致
+      group-id: "soar-workflow"
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.remove.type.headers: false
+      fetch-min-size: 1024
+      max-poll-records: 50
+    listener:
+      # 指定消息消费的模式，type=batch代表可以批量消费
+      type: batch
+      # 指定消费者的并发数，也就是可以同时有多少个消费者线程在监听数据，默认为1，
+      # 更具情况设置并行数据，通常建议最小为Cpu的核心数
+      concurrency: 1
+      poll-timeout: 6000
+  datasource:
+    platform: h2
+    url: jdbc:h2:file:~/activti
+    driverClassName: org.h2.Driver
+    username: sa
+    password: password
+    schema: classpath*:schema-h2.sql
+    continueOnError: true
+#  datasource:
+#    url: jdbc:mysql://192.168.30.153:3306/soar-web?useUnicode=true&characterEncoding=utf-8&useSSL=true&serverTimezone=GMT%2B8&nullCatalogMeansCurrent=true
+#    username: dbapp
+#    password: 1qazCDE#5tgb
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+#    type: com.alibaba.druid.pool.DruidDataSource
+#    initialization-mode: always
+#    initialSize: 20
+#    minIdle: 20
+#    maxActive: 50
+#    maxWait: 60000
+#    timeBetweenEvictionRunsMillis: 60000
+#    minEvictableIdleTimeMillis: 300000
+#    validationQuery: SELECT 1 FROM DUAL
+#    testWhileIdle: true
+#    testOnBorrow: false
+#    testOnReturn: false
+#    poolPreparedStatements: true
+#    #    filters: stat,wall,log4j
+#    maxPoolPreparedStatementPerConnectionSize: 20
+#    useGlobalDataSourceStat: true
+#    connectionProperties: druid.stat.mergeSql=true;druid.stat.slowSqlMillis=500
+  h2:
+    console:
+      enabled: true
